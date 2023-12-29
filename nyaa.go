@@ -118,7 +118,7 @@ func getLinksHttp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		println("error:", err)
 	} else {
-		println(string(result))
+		println("Writing response...")
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	io.WriteString(w, string(result))
