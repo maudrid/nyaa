@@ -8,15 +8,17 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 )
 
 type TConfig struct {
-	EndPoint string   `yaml:"endPoint"`
-	BaseUrl  string   `yaml:"baseUrl"`
-	Filters  []string `yaml:"filters"`
+	EndPoint  string   `yaml:"endPoint"`
+	BaseUrl   string   `yaml:"baseUrl"`
+	Filters   []string `yaml:"filters"`
+	RateLimit int      `yaml:"rateLimit"`
 }
 
 type TItem struct {
@@ -30,6 +32,11 @@ type TXmlResponseType struct {
 	Channel struct {
 		Items []TItem `xml:"item"`
 	} `xml:"channel"`
+}
+
+type TItems struct {
+	Items []TItem
+	Error error
 }
 
 func panicOnErr(e error) {
@@ -65,7 +72,7 @@ func readStdIn() (config []byte, err error) {
 
 func argsToMap(args []string) (map[string]string, error) {
 	if len(args)%2 != 0 {
-		return nil, errors.New("Error: Invalid number of parameters")
+		return nil, errors.New("error: invalid number of parameters")
 	}
 	rv := make(map[string]string)
 	for ix, x := range args {
@@ -76,37 +83,50 @@ func argsToMap(args []string) (map[string]string, error) {
 	return rv, nil
 }
 
-func getLinks(filter string) (items []TItem, err error) {
+func getLinks(filter string) (result TItems) {
+	fmt.Println("Trying:", filter)
 	resp, err := http.Get(filter)
 	if err != nil {
-		return nil, err
+		result := TItems{}
+		result.Items = nil
+		result.Error = err
+		return result
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		result := TItems{}
+		result.Items = nil
+		result.Error = err
+		return result
+	}
 	xmlResponse := TXmlResponseType{}
 	err = xml.Unmarshal(body, &xmlResponse)
 	if err != nil {
-		return nil, err
+		result := TItems{}
+		result.Items = nil
+		result.Error = err
+		return result
 	}
-	return xmlResponse.Channel.Items, nil
-}
-
-func getRoot(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("got / request\n")
-
-	io.WriteString(w, "ROOT, HTTP!\n")
+	result.Items = xmlResponse.Channel.Items
+	result.Error = nil
+	return result
 }
 
 func getLinksHttp(w http.ResponseWriter, r *http.Request) {
 	//fmt.Printf("%v", configuration.Filters)
 	var links []TItem
-	for i, filter := range configuration.Filters {
-		fmt.Println("Trying:", i, configuration.BaseUrl+filter)
-		subLinks, err := getLinks(configuration.BaseUrl + filter)
-		if err == nil {
-			links = append(links, subLinks...)
+	channel := make(chan TItems)
+	for _, filter := range configuration.Filters {
+		go func(filter string) { channel <- getLinks(configuration.BaseUrl + filter) }(filter)
+		time.Sleep(time.Duration(configuration.RateLimit) * time.Millisecond)
+	}
+	for range configuration.Filters {
+		result := <-channel
+		if result.Error == nil {
+			links = append(links, result.Items...)
 		} else {
-			fmt.Println("Warning", err)
+			fmt.Println("Warning", result.Error)
 		}
 	}
 	//fmt.Printf("%v", links)
