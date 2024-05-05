@@ -1,5 +1,7 @@
 endPoint: :3333
-rateLimit: 450
-baseUrl: https://nyaa.si/?page=rss&q=
-filters:
-  - 'subsplease+"%281080p%29"&c=0_0&f=0'
+cacheTTL: 6000
+feeds:
+  - rateLimit: 450
+    baseUrl: https://nyaa.si/?page=rss&q=
+    filters:
+      - 'subsplease+"%281080p%29"&c=0_0&f=0'

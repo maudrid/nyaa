@@ -14,12 +14,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type TConfig struct {
-	EndPoint  string   `yaml:"endPoint"`
+type TFeed struct {
 	BaseUrl   string   `yaml:"baseUrl"`
 	Filters   []string `yaml:"filters"`
 	RateLimit int      `yaml:"rateLimit"`
-	CacheTTL  int      `yaml:"cacheTTL"`
+}
+type TConfig struct {
+	EndPoint string  `yaml:"endPoint"`
+	Feeds    []TFeed `yaml:"feeds"`
+	CacheTTL int     `yaml:"cacheTTL"`
 }
 
 type TItem struct {
@@ -118,20 +121,22 @@ func fillCache() {
 	//fmt.Printf("%v", configuration.Filters)
 	var links []TItem
 	channel := make(chan TItems)
-	for _, filter := range configuration.Filters {
-		go func(filter string) { channel <- getLinks(configuration.BaseUrl + filter) }(filter)
-		time.Sleep(time.Duration(configuration.RateLimit) * time.Millisecond)
-	}
-	for range configuration.Filters {
-		result := <-channel
-		if result.Error == nil {
-			links = append(links, result.Items...)
-		} else {
-			fmt.Println("Warning", result.Error)
-		}
-	}
-	//fmt.Printf("%v", links)
 
+	for _, feed := range configuration.Feeds {
+		for _, filter := range feed.Filters {
+			go func(filter string) { channel <- getLinks(feed.BaseUrl + filter) }(filter)
+			time.Sleep(time.Duration(feed.RateLimit) * time.Millisecond)
+		}
+		for range feed.Filters {
+			result := <-channel
+			if result.Error == nil {
+				links = append(links, result.Items...)
+			} else {
+				fmt.Println("Warning", result.Error)
+			}
+		}
+		//fmt.Printf("%v", links)
+	}
 	responseCache.Channel.Items = links
 }
 
@@ -140,7 +145,7 @@ func getLinksHttp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		println("error:", err)
 	} else {
-		println("Writing response...")
+		print("Writing response... ")
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	io.WriteString(w, string(result))
@@ -190,6 +195,7 @@ func main() {
 		for range cacheTicker.C {
 			fmt.Println("Evicting cache...")
 			fillCache()
+			fmt.Println("Evicting cache done.")
 		}
 	}()
 	fmt.Println("Starting web server on", configuration.EndPoint)
