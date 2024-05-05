@@ -19,6 +19,7 @@ type TConfig struct {
 	BaseUrl   string   `yaml:"baseUrl"`
 	Filters   []string `yaml:"filters"`
 	RateLimit int      `yaml:"rateLimit"`
+	CacheTTL  int      `yaml:"cacheTTL"`
 }
 
 type TItem struct {
@@ -113,7 +114,7 @@ func getLinks(filter string) (result TItems) {
 	return result
 }
 
-func getLinksHttp(w http.ResponseWriter, r *http.Request) {
+func fillCache() {
 	//fmt.Printf("%v", configuration.Filters)
 	var links []TItem
 	channel := make(chan TItems)
@@ -131,10 +132,11 @@ func getLinksHttp(w http.ResponseWriter, r *http.Request) {
 	}
 	//fmt.Printf("%v", links)
 
-	var response TXmlResponseType
-	response.Version = "2.0"
-	response.Channel.Items = links
-	result, err := xml.Marshal(response)
+	responseCache.Channel.Items = links
+}
+
+func getLinksHttp(w http.ResponseWriter, r *http.Request) {
+	result, err := xml.Marshal(responseCache)
 	if err != nil {
 		println("error:", err)
 	} else {
@@ -142,9 +144,12 @@ func getLinksHttp(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	io.WriteString(w, string(result))
+	println("Done.")
 }
 
 var configuration TConfig
+var responseCache TXmlResponseType
+var confCounter int8
 
 func main() {
 	args, err := argsToMap(os.Args[1:])
@@ -171,8 +176,23 @@ func main() {
 		err = watcher.Add(args["-f"])
 		panicOnErr(err)
 	}
+	responseCache.Version = "2.0"
+	confCounter = 0
 	http.HandleFunc("/links", getLinksHttp)
-	fmt.Println("Starting webserver on", configuration.EndPoint)
+	fmt.Println("Filling Cache...")
+	fillCache()
+	if configuration.CacheTTL == 0 {
+		configuration.CacheTTL = 3600
+	}
+	fmt.Println("Starting cache ttl timer (seconds):", configuration.CacheTTL)
+	cacheTicker := time.NewTicker(time.Duration(configuration.CacheTTL) * time.Second)
+	go func() {
+		for range cacheTicker.C {
+			fmt.Println("Evicting cache...")
+			fillCache()
+		}
+	}()
+	fmt.Println("Starting web server on", configuration.EndPoint)
 	fmt.Println("Ctrl-C to stop.")
 	err = http.ListenAndServe(configuration.EndPoint, nil)
 	panicOnErr(err)
@@ -193,8 +213,13 @@ func refreshConfig(watcher *fsnotify.Watcher, args map[string]string) {
 				return
 			}
 			if event.Has(fsnotify.Write) {
-				fmt.Println("modified file:", event.Name)
-				configFromYamlFile(args) //This is bad maybe? To access memory (global variable) that other thread may be using.
+				confCounter++
+				if confCounter == 2 {
+					confCounter = 0
+					fmt.Println("modified file:", event.Name)
+					configFromYamlFile(args) //This is bad maybe? To access memory (global variable) that other thread may be using.
+					fillCache()
+				}
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
